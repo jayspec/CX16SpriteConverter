@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "CX16SpriteConverter": {
+      "commandName": "Project",
+      "commandLineArgs": "commodore64.gpl plane.png plane.img"
+    }
+  }
+}
