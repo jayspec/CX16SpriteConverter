@@ -2,7 +2,7 @@
   "profiles": {
     "CX16SpriteConverter": {
       "commandName": "Project",
-      "commandLineArgs": "commodore64.gpl plane.png plane.img"
+      "commandLineArgs": "heros.pal heros.png heros.img heros.imp"
     }
   }
 }
