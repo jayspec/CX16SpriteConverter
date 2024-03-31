@@ -1,68 +1,81 @@
 ﻿using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using System.CommandLine;
 using System.Text.RegularExpressions;
 
-var paletteFile = args[0];
-var fileToConvert = args[1];
-var outputFile = args[2];
-var paletteOutputFile = args[3];
+var paletteFileOption = new Option<string>(
+    name: "--paletteFile",
+    description: "The Gimp-formatted palette file (RGB values as plain text) to convert to CX16 12-bit color"
+) { IsRequired = true };
 
-int extraImageColors = 0;
+var spriteSheetFileOption = new Option<string>(
+    name: "--spriteSheetFile",
+    description: "A PNG indexed color sprite sheet file to convert to CX16 4bpp indexed sprite."
+) { IsRequired = true };
 
-// sprite dimensions
-int spriteSize = 32;
+var spriteSizeOption = new Option<int>(
+    name: "--spriteSize",
+    description: "Size of one square side of a square sprite.",
+    getDefaultValue: () => 32
+);
 
-List<Rgb24> paletteColors = GetPaletteColorsFromFile(paletteFile);
+var spriteOutputFileOption = new Option<string>(
+    name: "--spriteOutputFile",
+    description: "The CX16 sprite sheet, ready to directly load into memory."
+) { IsRequired = true };
 
-if (paletteColors.Count > 16)
+var paletteOutputFileOption = new Option<string?>(
+    name: "--paletteOutputFile",
+    description: "The C16 palette file, ready to be loaded into memory at a 16-color offset."
+);
+
+var rootCommand = new RootCommand("Convert indexed color PNG sprite sheets for use as sprites in the Commander X16.");
+rootCommand.AddOption(paletteFileOption);
+rootCommand.AddOption(spriteSheetFileOption);
+rootCommand.AddOption(spriteSizeOption);
+rootCommand.AddOption(spriteOutputFileOption);
+rootCommand.AddOption(paletteOutputFileOption);
+
+rootCommand.SetHandler((paletteFile, spriteSheetFile, spriteSize, spriteOutputFile, paletteOutputFile) =>
 {
-    Console.WriteLine($"Warning: {paletteColors.Count} colors found in palette.  Max is 16 for 4bpp.");
-}
+    ConvertToCx16Sprites(paletteFile, spriteSheetFile, spriteSize, spriteOutputFile, paletteOutputFile);
+}, paletteFileOption, spriteSheetFileOption, spriteSizeOption, spriteOutputFileOption, paletteOutputFileOption);
 
-byte[] paletteOutputBytes = new byte[paletteColors.Count * 2];
-int paletteByteIndex = 0;
-foreach (var paletteColor in paletteColors)
+
+return rootCommand.Invoke(args);
+
+void ConvertToCx16Sprites(string paletteFile, string spriteSheetFile, int spriteSize, string spriteOutputFile, string? paletteOutputFile)
 {
-    int green4Bit = paletteColor.G >> 4;
-    int blue4Bit = paletteColor.B >> 4;
-    int red4Bit = paletteColor.R >> 4;
+    int extraImageColors = 0;
 
-    byte greenBlueByte = OneBitIntToByte(green4Bit << 4 | blue4Bit);
-    byte redByte = OneBitIntToByte(red4Bit);
-
-    paletteOutputBytes[paletteByteIndex] = greenBlueByte;
-    paletteOutputBytes[paletteByteIndex + 1] = redByte;
-
-    paletteByteIndex += 2;
-}
-
-WriteBytesToFile(paletteOutputFile, paletteOutputBytes);
-
-using (Image<Rgba32> inputFile = Image.Load<Rgba32>(fileToConvert))
-{
-    if ((inputFile.Width % spriteSize != 0) || (inputFile.Height % spriteSize != 0))
+    List<Rgb24> paletteColors = GetPaletteColorsFromFile(paletteFile);
+    if (paletteOutputFile != null)
     {
-        Console.WriteLine("Warning: image does not conform to sprite size.");
+        WritePaletteColorsToFile(paletteOutputFile, paletteColors);
     }
 
-    int numCols = inputFile.Width / spriteSize;
-    int numRows = inputFile.Height / spriteSize;
-    int numSpritesInSheet = (numCols * numRows);
-
-    // 4bpp = 1 byte per 2 pixels
-    byte[] outputBytes = new byte[(inputFile.Width * inputFile.Height / 2)];
-    int byteIndex = 0;
-
-    for (int currentSprite = 0; currentSprite < numSpritesInSheet; currentSprite++)
+    using (Image<Rgba32> inputFile = Image.Load<Rgba32>(spriteSheetFile))
     {
+        if ((inputFile.Width % spriteSize != 0) || (inputFile.Height % spriteSize != 0))
+        {
+            Console.WriteLine("Warning: image does not conform to sprite size.");
+        }
+
+        int numCols = inputFile.Width / spriteSize;
+        int numRows = inputFile.Height / spriteSize;
+
+        // 4bpp = 1 byte per 2 pixels
+        byte[] outputBytes = new byte[(inputFile.Width * inputFile.Height / 2)];
+        int byteIndex = 0;
+
         for (int currentRow = 0; currentRow < numRows; currentRow++)
         {
             for (int currentcol = 0; currentcol < numCols; currentcol++)
             {
                 for (int y = currentRow * spriteSize; y < (currentRow + 1) * spriteSize; y++)
                 {
-                    for (int x = currentcol * spriteSize; x < (currentcol + 1) * spriteSize; x++)
+                    for (int x = currentcol * spriteSize; x < (currentcol + 1) * spriteSize; x+=2)
                     {
                         Rgba32 highNibbleColor = inputFile[x, y];
                         Rgba32 lowNibbleColor = inputFile[x + 1, y];
@@ -96,15 +109,45 @@ using (Image<Rgba32> inputFile = Image.Load<Rgba32>(fileToConvert))
                 }
             }
         }
+        
+
+        if (extraImageColors > 0)
+        {
+            Console.WriteLine($"Warning: {extraImageColors} were found that weren't in the original palette.");
+        }
+
+        WriteBytesToFile(spriteOutputFile, outputBytes);
     }
 
-    if (extraImageColors > 0)
+    void WritePaletteColorsToFile(string paletteOutputFile, List<Rgb24> paletteColors)
     {
-        Console.WriteLine($"Warning: {extraImageColors} were found that weren't in the original palette.");
-    }
+        if (paletteColors.Count > 16)
+        {
+            Console.WriteLine($"Warning: {paletteColors.Count} colors found in palette.  Max is 16 for 4bpp.");
+        }
 
-    WriteBytesToFile(outputFile, outputBytes);
+        byte[] paletteOutputBytes = new byte[paletteColors.Count * 2];
+        int paletteByteIndex = 0;
+        foreach (var paletteColor in paletteColors)
+        {
+            int green4Bit = paletteColor.G >> 4;
+            int blue4Bit = paletteColor.B >> 4;
+            int red4Bit = paletteColor.R >> 4;
+
+            byte greenBlueByte = OneBitIntToByte(green4Bit << 4 | blue4Bit);
+            byte redByte = OneBitIntToByte(red4Bit);
+
+            paletteOutputBytes[paletteByteIndex] = greenBlueByte;
+            paletteOutputBytes[paletteByteIndex + 1] = redByte;
+
+            paletteByteIndex += 2;
+        }
+
+        WriteBytesToFile(paletteOutputFile, paletteOutputBytes);
+    }
 }
+
+
 
 byte OneBitIntToByte(int value)
 {
